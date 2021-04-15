@@ -44,16 +44,16 @@ Oddly enough, they didn't come back with the same results: the external audit ca
 How could it happen?
 
 One day, someone from the team needed to quickly test something on a customer database who experienced a bug. A single value to change. Going through the hassle of switching to the secure network, then connecting to the corporate VPN, then going through the Bastion using a smartcard for authentication, probably also having to explain soon to the security team why he connected and what he did...this was definitely too much.
-Especially when he could simply allow the company's office outgoig IPv4 on the "PgSQL" security group! And remove it after the change. Moreover, he would _necessarily_ remember about it, as all the Security Groups were 100% managed by Terraform on CI.
+Especially when he could simply allow the company's office outgoing IPv4 on the "PgSQL" security group! And remove it after the change. Moreover, he would _necessarily_ remember about it, as all the Security Groups were 100% managed by Terraform on CI.
 
-![Screenshot AWS Security Group Rule allowing companys IP](img/add_5432_ipv4_sg.png "AWS Security Group Rule allowing companys IP")
+![Screenshot AWS Security Group Rule allowing companys IP](img/add_5432_ipv4_sg.png "AWS Security Group Rule allowing company IP")
 
 And it worked well! That team member fixed the customer issue in the database quickly.
 
 And forgot to remove the security group rule, until it was discovered by the auditor, so that he could:
 
 1. connect painlessly to the customer databases from the office
-2. then easily find passwords using a tool like [hydra](https://tools.kali.org/password-attacks/hydra) against postgresql.
+2. then easily find passwords using a tool like [hydra](https://tools.kali.org/password-attacks/hydra) against PostgreSQL.
 3. profit.
 
 ## How we ended up there?
@@ -68,7 +68,7 @@ We can't do much about the first issue: it's the harsh reality of most companies
 
 ### The lists are not what they seem
 
-The second issue is confusing because of what can the UI lead you to believe. As developers, we know that `cidr_blocks = ["10.0.0.0/8"]` is a list, and that adding an element to it will make it different.
+The second issue is confusing because of what can the UI lead you to believe. As developers, we know that `cidr_blocks = ["10.0.0.0/8"]` is a list and that adding an element to it will make it different.
 
 As a developer, I can also easily believe that such a design in the AWS Console would also generate a list, both IPs are listed under the same line, exactly as if I read `["10.0.0.0/8", "96.202.220.106/32"]`:
 
@@ -124,7 +124,7 @@ To be more precise, something happened. It's even more insidious. The manual cha
 
 Yes, you can end up with a Terraform state with way more information and resources than you intended from the code.
 
-The way Security Group Rules were written couldn't help discovering the change (not to mention notifiying anyone). You could add a billion rules and it would be the same.
+The way Security Group Rules were written couldn't help discovering the change (not to mention notifying anyone). You could add a billion rules and it would be the same.
 
 If you read Terraform's documentation for the AWS provider (currently v3.36), you'll find 2 options:
 
