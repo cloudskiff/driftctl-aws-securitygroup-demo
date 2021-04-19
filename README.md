@@ -31,9 +31,9 @@ resource "aws_security_group_rule" "pgsql" {
 
 ```
 
-They had a scheduled `terraform plan` as a GitHub Action for the whole infrastructure, so if something changed, it was immediately reported.
+They had a scheduled `terraform plan` as a GitHub Action for the whole infrastructure, so if something changed, it was reported right away. The "GitOps" workflow also included some linters, a `terraform plan`, followed by a `terraform apply` after a merge on the main branch.
 
-It worked well and passed initial security audits. Good job!
+It worked well and satisfied the initial basic security requirements. Good job!
 
 ## That one Security Group temporary change
 
@@ -58,27 +58,28 @@ And forgot to remove the security group rule, until it was discovered by the aud
 
 ## How we ended up there?
 
-3 issues are on display here:
+Here's the context in which this team worked:
 
-1. A team member had AWS Web Console credentials large enough to make Security Group changes
-2. The way security group rules are handled by AWS
-3. The way the Security Groups were written using Terraform
+- a team member had AWS Web Console credentials large enough to make Security Group changes
+- they assumed Security Group Rules were represented similarly on AWS and Terraform
+- they wrote their Security Groups rules a certain way using Terraform
 
 We can't do much about the first issue: it's the harsh reality of most companies today. Surely enough they need to adopt a proper full GitOps workflow, but most aren't there yet (and won't be for a while).
 
 ### The lists are not what they seem
 
-The second issue is confusing because of what can the UI lead you to believe. As developers, we know that `cidr_blocks = ["10.0.0.0/8"]` is a list and that adding an element to it will make it different.
+The second assumption is confusing because of what can the UI lead you to believe. As developers, we know that `cidr_blocks = ["10.0.0.0/8"]` is a list and that adding an element to it will make it different.
 
 As a developer, I can also easily believe that such a design in the AWS Console would also generate a list, both IPs are listed under the same line, exactly as if I read `["10.0.0.0/8", "96.202.220.106/32"]`:
 
 ![Screenshot AWS Security Group Rules Look Grouped](img/add_5432_grouped.png "AWS Security Group Rules Look Grouped")
 
-The thing is, in the end, they end up being two distinct resources and not 2 elements of a list. This will have immediate consequences.
+The thing is, in the end, on the AWS side, they really are two elements of a list, but in the Terraform model, they end up being two distinct resources and not two elements. This difference in models between the cloud provider and Terraform can sometimes be misleading for users and can have major consequences.
 
 ### The way you write your Terraform matters
 
-The third and final issue here is the way the Terraform was written.
+The third and final situation here is the way the Terraform configuration was written.
+
 Can you guess what happened in CI for months after the manual change wasn't reverted? Nothing.
 
 ```shell
@@ -89,7 +90,7 @@ aws_security_group_rule.pgsql: Refreshing state... [id=sgrule-3696232291]
 Apply complete! Resources: 0 added, 0 changed, 0 destroyed.
 ```
 
-To be more precise, something happened. It's even more insidious. The manual change was added without anyone knowing about it in the `terraform.tfstate` right after the next `terraform apply` happened in CI:
+To be more precise, something happened. The manual Security Group rule change was added without anyone being notified about it in the `terraform.tfstate` right when the next `terraform apply` ran in CI:
 
 ```json
             "ingress": [
@@ -122,16 +123,16 @@ To be more precise, something happened. It's even more insidious. The manual cha
             ],
 ```
 
-Yes, you can end up with a Terraform state with way more information and resources than you intended from the code.
+Yes, you will end up with a Terraform state with way more information and resources than you intended from the code, as the Terraform state job is not to represent your intention, but to [map the real world with your config](https://www.terraform.io/docs/language/state/purpose.html).
 
 The way Security Group Rules were written couldn't help discovering the change (not to mention notifying anyone). You could add a billion rules and it would be the same.
 
-If you read Terraform's documentation for the AWS provider (currently v3.36), you'll find 2 options:
+Fortunately, in this case, if you read Terraform's documentation for the AWS provider (currently v3.36), you'll find 2 options to configure Security Groups:
 
 1. Use the [aws_security_group](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group) resource with inline `egress {}` and `ingress {}` blocks for the rules.
 2. Use the [aws_security_group](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group) resource with additional [aws_security_group_rule](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group_rule) resources.
 
-In this case, using the first option would have been better for this team, see how the next `terraform apply` in CI would have had the expected effect:
+In this case, using the first option would have been better for this team, from a more DevSecOps point of view. See how the next `terraform apply` in CI would have had the expected effect:
 
 ```shell
 $ terraform apply
@@ -173,14 +174,14 @@ Plan: 0 to add, 1 to change, 0 to destroy.
 
 ```
 
-Unfortunately, it's often too late when you realize it, and this not always the best solution for every use case!
+Unfortunately, it's often too late when you realize it, and this kind of option doesn't exist for every resource out there. What was a DevOps discussion (*"let's automate those deployments and ship that on CI!"*) can quickly become a DevSecOps discussion now (*"how should we write our Terraform configuration according to our goals?"*).
 
-## The Driftctl option
+## The driftctl option
 
-That's when using driftctl is always a good option. As the tool compares your Terraform state to the reality of your AWS account, you can deploy the tool at 2 important places of your workflow:
+That's why using driftctl is always a good option. As the tool compares your Terraform state to the reality of your AWS account, you can deploy the tool at 2 important places of your workflow:
 
 1. as a scheduled run (like an hourly cronjob), so you get reports when something changes
-2. as a pre-requisite to a `terraform apply` step in CI: so you make sure no uncontrolled resource ends up in the state: it will alert before.
+2. as a pre-condition to a `terraform apply` step in CI: so you ensure you're working with an unmodified Terraform state (as by design the `refresh` part of the `apply` can modify it). You may also want to parallelize this `driftctl` step with a `terraform plan`.
 
 Here's a `driftctl` run when the activity is as expected on the AWS account:
 
@@ -212,9 +213,16 @@ $  echo $?
 1
 ```
 
+This output clearly shows:
+
+- a resource NOT on the Terraform state, of type `aws_security_group_rule`, for the Security Group `sg-0ce251e7ce328547d`, that allows TCP/5432 for `96.202.220.106/32`. This should trigger an alarm!
+- some metrics for your own reference.
+
+This output can be exported as JSON too, so you can easily manipulate it and integrated it into your other tools and notification systems.
+
 There's a ton of other options and integrations you can use with `driftctl`, but that will be for another article!
 
-Reference: 
+Reference:
 
 - [driftctl.com](https://driftctl.com)
 - [driftctl GitHub](https://github.com/cloudskiff/driftctl)
